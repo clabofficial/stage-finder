@@ -1,11 +1,9 @@
-name: 매일 공연 업데이트
+name: 사이트 배포
 
 on:
-  schedule:
-    - cron: "17 19 * * *"   # 매일 한국시간 새벽 4시 17분
-  workflow_dispatch:         # Actions 화면에서 'Run workflow'로 바로 실행
-  push:                      # 파일을 새로 올리면(디자인 수정 등) 바로 반영
+  push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,61 +15,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  update:
+  deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: 이미지 도구 설치
-        run: pip install pillow
-
-      - name: 지난번 DB 불러오기
-        uses: actions/cache/restore@v4
-        with:
-          path: performances.db
-          key: db-${{ github.run_id }}
-          restore-keys: db-
-
-      - name: KOPIS 공연 데이터 받기
-        if: github.event_name != 'push'   # 디자인만 바꿨을 때는 데이터 수집 건너뛰기
-        env:
-          KOPIS_KEY: ${{ secrets.KOPIS_KEY }}
-        run: python sync.py --days 365
-
-      - name: 출연진·작곡가 태그 붙이기
-        if: github.event_name != 'push'
-        run: python enrich.py
-
-      - name: AI로 곡목 읽기 (아직 안 읽은 클래식 공연만)
-        if: github.event_name != 'push'
-        continue-on-error: true
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python enrich.py --ai --genre "서양음악(클래식)"
-
-      - name: DB 저장 (다음 실행 때 이어서 쓰기)
-        if: always() && hashFiles('performances.db') != ''
-        uses: actions/cache/save@v4
-        with:
-          path: performances.db
-          key: db-${{ github.run_id }}
-
-      - name: 사이트 만들기
-        run: python export.py
-
       - uses: actions/configure-pages@v5
-
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
-
       - id: deploy
         uses: actions/deploy-pages@v4
