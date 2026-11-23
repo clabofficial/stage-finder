@@ -34,22 +34,32 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 ROWS = 50  # 한 번에 받을 개수
 
 
-def _get(path, params, retries=3):
+class Blocked(RuntimeError):
+    """KOPIS가 요청이 너무 많다고 잠시 막은 상태 — 더 보내지 말고 멈춰야 함."""
+
+
+WAITS = [3, 10, 30, 60, 120]  # 인터넷이 잠깐 끊겼을 때 기다렸다가 다시 시도 (최대 약 4분)
+
+
+def _get(path, params):
     url = f"{BASE}/{path}?" + urllib.parse.urlencode(params)
-    for i in range(retries):
+    for i in range(len(WAITS) + 1):
         try:
             req = urllib.request.Request(url, headers=HEADERS)
             with urllib.request.urlopen(req, timeout=20) as r:
                 return ET.fromstring(r.read())
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", "replace")[:300]
-            if i == retries - 1:
+            if "Request Blocked" in body:
+                raise Blocked("KOPIS가 요청을 잠시 막았어요 (너무 많은 요청). 몇 시간 뒤 다시 실행하세요.")
+            if i >= 2:  # 서버가 거절한 경우는 몇 번만 재시도
                 raise RuntimeError(f"KOPIS 호출 실패: {path} (HTTP {e.code})\n  KOPIS 응답: {body}")
-            time.sleep(1.5 * (i + 1))
-        except Exception as e:  # 네트워크 오류 시 잠깐 쉬고 재시도
-            if i == retries - 1:
+            time.sleep(WAITS[i])
+        except Exception as e:  # 네트워크 끊김·시간 초과 → 기다렸다 재시도
+            if i == len(WAITS):
                 raise RuntimeError(f"KOPIS 호출 실패: {path} ({e})")
-            time.sleep(1.5 * (i + 1))
+            print(f"    연결 문제, {WAITS[i]}초 뒤 다시 시도… ({e})")
+            time.sleep(WAITS[i])
 
 
 def _t(el, tag):

@@ -1,0 +1,4 @@
+__pycache__/
+performances.db
+keys.env
+update.log

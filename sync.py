@@ -27,33 +27,69 @@ def windows(start, days, size=31):
         d = e + dt.timedelta(days=1)
 
 
+LIST_GAP = 0.5     # 목록 요청 사이 쉬는 시간(초)
+DETAIL_GAP = 0.7   # 상세 요청 사이 쉬는 시간(초)
+REFRESH_DAYS = 7   # 이미 받은 공연은 7일에 한 번만 상세 정보를 다시 받음
+
+
 def sync(key, days, genres):
     con = kopis.connect()
     ids = set()
+    failed = 0
+    blocked = False
     for g in genres:
+        if blocked:
+            break
         for s, e in windows(dt.date.today(), days):
             page = 1
             while True:
-                got = kopis.list_performances(key, s, e, genre=g, page=page)
+                try:
+                    got = kopis.list_performances(key, s, e, genre=g, page=page)
+                except kopis.Blocked as ex:
+                    print(" ", ex)
+                    blocked = True
+                    break
+                except Exception as ex:  # 이 구간만 건너뛰고 계속 (내일 다시 받음)
+                    failed += 1
+                    print(f"  목록 실패, 건너뜀: {kopis.GENRES.get(g, g)} {s}~{e} p{page} ({ex})")
+                    break
                 ids.update(got)
                 print(f"  목록 {kopis.GENRES.get(g, g)} {s}~{e} p{page}: {len(got)}건")
                 if len(got) < kopis.ROWS:
                     break
                 page += 1
-                time.sleep(0.2)
-    print(f"공연 {len(ids)}건 상세 조회 중…")
-    for i, mid in enumerate(sorted(ids), 1):
+                time.sleep(LIST_GAP)
+            if blocked:
+                break
+            time.sleep(LIST_GAP)
+    if not ids:
+        sys.exit("공연 목록을 하나도 받지 못했어요. 인터넷 연결, KOPIS 인증키, 또는 KOPIS 차단 여부를 확인하세요.")
+    if failed:
+        print(f"※ 목록 {failed}개 구간을 받지 못했어요. 나머지는 계속 진행합니다.")
+
+    # 새 공연 + 오래된 공연만 상세 조회 (매일 수천 건을 다시 받지 않도록)
+    cutoff = (dt.datetime.utcnow() - dt.timedelta(days=REFRESH_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+    known = dict(con.execute("SELECT id, updated FROM performances"))
+    todo = sorted(i for i in ids if i not in known or (known[i] or "") < cutoff)
+    print(f"목록 {len(ids)}건 중 새로 받을 상세 정보 {len(todo)}건" + (" (목록이 일부만 받아졌어요)" if blocked else ""))
+    for i, mid in enumerate(todo, 1):
         try:
             p = kopis.get_detail(key, mid)
             if p:
                 kopis.save(con, p)
+        except kopis.Blocked as ex:
+            print(" ", ex)
+            blocked = True
+            break
         except Exception as ex:
             print("  건너뜀", mid, ex)
         if i % 50 == 0:
             con.commit()
-            print(f"  {i}/{len(ids)}")
-        time.sleep(0.1)  # 서버 부담 줄이기
+            print(f"  {i}/{len(todo)}")
+        time.sleep(DETAIL_GAP)
     con.commit()
+    if blocked:
+        print("※ KOPIS 차단으로 일부만 받았어요. 받은 데이터는 저장했고, 다음 실행 때 이어서 받습니다.")
     print("완료:", kopis.DB_PATH)
 
 
